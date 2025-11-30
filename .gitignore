@@ -1,0 +1,19 @@
+# Cargo build artifacts
+/target/
+
+# Rust toolchain dumps
+Cargo.lock
+**/*.rs.bk
+
+# OS-specific trash
+.DS_Store
+Thumbs.db
+
+# Backup or temp files
+*.tmp
+*.temp
+*.swp
+*.swo
+
+# IDE
+.idea/
