@@ -1,6 +1,11 @@
 [package]
 name = "Balatro-shader-simulation"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
+winit = "0.30"
+wgpu = "27.0.1"
+image = "0.25"
+pollster = "0.4"
+bytemuck = { version = "1.24", features = ["derive"] }
