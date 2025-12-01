@@ -3,10 +3,38 @@ use std::sync::Arc;
 use image::{DynamicImage, GenericImageView, RgbaImage};
 use std::env;
 use std::path::Path;
+use std::sync::mpsc::channel;
+use std::time::Duration;
+use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
+use wgpu::Texture;
 use wgpu::util::DeviceExt;
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::Window;
+
+// write a new texture to the queue
+fn write_texture(queue: &wgpu::Queue, texture: &Texture, img_path: &String, height: u32, width: u32) {
+    match load_image(&img_path) {
+        Ok(img) => {
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &img.into_raw(),
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4 * width),
+                    rows_per_image: Some(height),
+                },
+                wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            );
+        },
+        Err(e) => eprintln!("Failed to load image: {}", e),
+    }
+}
 
 // Parse command line arguments to return an image path
 fn parse_args() -> String {
@@ -22,31 +50,54 @@ fn parse_args() -> String {
     args[1].clone()
 }
 
-// Loads an image from the filesystem and returns it as a RGBA8 image
-fn load_image(img_path: &String) -> RgbaImage {
+// Open a file dialog using rfd
+fn pick_image_file() -> String {
+    let file = rfd::FileDialog::new()
+        .set_title("Select an image")
+        .add_filter("Image", &["png", "jpg", "jpeg", "bmp"])
+        .pick_file();
 
-    // Check if image exists in filesystem
+    match file {
+        Some(path) => path.to_string_lossy().to_string(),
+        None => {
+            eprintln!("No file selected. Exiting.");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn load_image(img_path: &str) -> Result<RgbaImage, image::ImageError> {
     if !Path::new(img_path).exists() {
-        eprintln!("Image not found: {}", img_path);
-        std::process::exit(1);
+        return Err(image::ImageError::IoError(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("File not found: {}", img_path),
+        )));
     }
 
-    // Load the image
-    let img_dynamic = image::open(img_path).expect("Failed to load image");
-
-    // Convert to RGBA8 (we need this for wgpu)
-    img_dynamic.to_rgba8()
+    let img_dynamic = image::open(img_path)?;
+    Ok(img_dynamic.to_rgba8())
 }
 
 fn main() {
 
     // Load and store image
-    let img_path = parse_args();
-    let img = load_image(&img_path);
+    let img_path = pick_image_file();
+    let img = load_image(&img_path).expect("Failed to load image");
     let (width, height) = (img.width(), img.height());
 
     // create an event loop
     let event_loop = EventLoop::new().expect("Failed to create event loop");
+
+    // create a channel to watch for changes to image file
+    let (tx, rx) = channel();
+
+    // create a watcher for the channel
+    let mut watcher: RecommendedWatcher =
+        Watcher::new(tx, Config::default()).expect("Failed to create watcher");
+
+    // start watching file
+    watcher.watch((&img_path).as_ref(), RecursiveMode::NonRecursive)
+        .expect("Failed to watch file");
 
     // build our viewport with the image size in mind
     let window_attributes = Window::default_attributes()
@@ -76,7 +127,7 @@ fn main() {
         })
     ).expect("Failed to find an appropriate adapter");
 
-    // create a device interface with the selected gpu
+    // create a device interface and queue for the selected gpu
     let (device, queue) = pollster::block_on(
         adapter.request_device(
             &wgpu::DeviceDescriptor {
@@ -126,21 +177,7 @@ fn main() {
     });
 
     // write this texture to our device
-    queue.write_texture(
-        wgpu::TexelCopyTextureInfo {
-            texture: &texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        &img.into_raw(),
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(4 * width),
-            rows_per_image: Some(height),
-        },
-        texture_size,
-    );
+    write_texture(&queue, &texture, &img_path, height, width);
 
     // create a sampler to tell the adapter how to handle the texture it's been given
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -275,6 +312,14 @@ fn main() {
 
         match event {
             Event::WindowEvent { event, window_id } if window_id == window.id() => {
+
+                // receive file change event from watcher
+                if let Ok(msg) = rx.try_recv() {
+                    write_texture(&queue, &texture, &img_path, height, width);
+                    window.request_redraw();
+                    println!("File change received: {:?}", msg);
+                }
+
                 match event {
                     WindowEvent::Resized(physical_size) => {
                         let width = physical_size.width.max(1);
