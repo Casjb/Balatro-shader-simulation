@@ -1,7 +1,9 @@
 use std::default::Default;
+use std::sync::Arc;
 use image::{DynamicImage, GenericImageView, RgbaImage};
 use std::env;
 use std::path::Path;
+use wgpu::util::DeviceExt;
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::Window;
@@ -52,6 +54,7 @@ fn main() {
     
     let window = event_loop.create_window(window_attributes)
         .expect("Failed to create window");
+    let window = Arc::new(window);
 
     // create a gpu instance (this represents the direct connection to the hardware)
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
@@ -60,7 +63,7 @@ fn main() {
     });
 
     // create a surface (this represents what we are drawing to, and will be the window we defined above)
-    let surface = instance.create_surface(&window)
+    let surface = instance.create_surface(window.clone())
         .expect("Failed to create surface");
 
     // looks for a gpu that's compatible with our needs
@@ -188,5 +191,150 @@ fn main() {
         label: Some("texture_bind_group"),
     });
 
+    // define vertex data for a quad
+    #[repr(C)]
+    #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+    struct Vertex {
+        position: [f32; 2],
+        uv: [f32; 2],
+    }
+    let vertices = [
+        Vertex { position: [-1.0, -1.0], uv: [0.0, 1.0] },
+        Vertex { position: [ 1.0, -1.0], uv: [1.0, 1.0] },
+        Vertex { position: [ 1.0,  1.0], uv: [1.0, 0.0] },
+        Vertex { position: [-1.0,  1.0], uv: [0.0, 0.0] },
+    ];
+    let indices: &[u16] = &[0, 1, 2, 2, 3, 0];
+    let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Vertex Buffer"),
+        contents: bytemuck::cast_slice(&vertices),
+        usage: wgpu::BufferUsages::VERTEX,
+    });
+    let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Index Buffer"),
+        contents: bytemuck::cast_slice(indices),
+        usage: wgpu::BufferUsages::INDEX,
+    });
 
+    let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Shader"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/shaders.wgsl").into()),
+    });
+
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Pipeline Layout"),
+        bind_group_layouts: &[&bind_group_layout],
+        push_constant_ranges: &[],
+    });
+
+    let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Render Pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader_module,
+            entry_point: Option::from("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &[
+                    wgpu::VertexAttribute {
+                        offset: 0,
+                        shader_location: 0,
+                        format: wgpu::VertexFormat::Float32x2,
+                    },
+                    wgpu::VertexAttribute {
+                        offset: 8,
+                        shader_location: 1,
+                        format: wgpu::VertexFormat::Float32x2,
+                    },
+                ],
+            }],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader_module,
+            entry_point: Option::from("fs_main"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: surface_format,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+        cache: None,
+    });
+    
+    event_loop.run(move |event, event_loop_window_target| {
+        event_loop_window_target.set_control_flow(ControlFlow::Poll);
+
+        match event {
+            Event::WindowEvent { event, window_id } if window_id == window.id() => {
+                match event {
+                    WindowEvent::CloseRequested => {
+                        event_loop_window_target.exit();
+                    }
+                    WindowEvent::RedrawRequested => {
+                        // Get the current surface texture
+                        let frame = surface
+                            .get_current_texture()
+                            .expect("Failed to acquire next swap chain texture");
+                        let view = frame
+                            .texture
+                            .create_view(&wgpu::TextureViewDescriptor::default());
+                        
+                        // Create command encoder
+                        let mut encoder = device.create_command_encoder(
+                            &wgpu::CommandEncoderDescriptor {
+                                label: Some("Render Encoder"),
+                            }
+                        );
+                        
+                        // Begin render pass
+                        {
+                            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("Render Pass"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: &view,
+                                    depth_slice: None,
+                                    resolve_target: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                                            r: 0.1,
+                                            g: 0.2,
+                                            b: 0.3,
+                                            a: 1.0,
+                                        }),
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                })],
+                                depth_stencil_attachment: None,
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                            });
+                            
+                            render_pass.set_pipeline(&render_pipeline);
+                            render_pass.set_bind_group(0, &bind_group, &[]);
+                            render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                            render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+                            render_pass.draw_indexed(0..6, 0, 0..1);
+                        }
+                        
+                        // Submit command buffer
+                        queue.submit(std::iter::once(encoder.finish()));
+                        frame.present();
+                    }
+                    _ => {}
+                }
+            }
+            Event::AboutToWait => {
+                // Request redraw each frame
+                window.request_redraw();
+            }
+            _ => {}
+        }
+    }).expect("Event loop error");
 }
