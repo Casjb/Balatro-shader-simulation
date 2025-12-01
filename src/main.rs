@@ -41,7 +41,8 @@ fn load_image(img_path: &String) -> RgbaImage {
 fn main() {
 
     // Load and store image
-    let img = load_image(&parse_args());
+    let img_path = parse_args();
+    let img = load_image(&img_path);
     let (width, height) = (img.width(), img.height());
 
     // create an event loop
@@ -95,7 +96,7 @@ fn main() {
     let surface_alpha_mode = caps.alpha_modes[0];
 
     // configure the surface to the chosen device
-    let config = wgpu::SurfaceConfiguration {
+    let mut config = wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format: surface_format,
         width,
@@ -267,13 +268,24 @@ fn main() {
         multiview: None,
         cache: None,
     });
-    
+
+    // main loop
     event_loop.run(move |event, event_loop_window_target| {
         event_loop_window_target.set_control_flow(ControlFlow::Poll);
 
         match event {
             Event::WindowEvent { event, window_id } if window_id == window.id() => {
                 match event {
+                    WindowEvent::Resized(physical_size) => {
+                        let width = physical_size.width.max(1);
+                        let height = physical_size.height.max(1);
+                        
+                        config.width = width;
+                        config.height = height;
+                        surface.configure(&device, &config);
+                        
+                        window.request_redraw();
+                    }
                     WindowEvent::CloseRequested => {
                         event_loop_window_target.exit();
                     }
@@ -286,7 +298,7 @@ fn main() {
                             .texture
                             .create_view(&wgpu::TextureViewDescriptor::default());
                         
-                        // Create command encoder
+                        // Create a command encoder
                         let mut encoder = device.create_command_encoder(
                             &wgpu::CommandEncoderDescriptor {
                                 label: Some("Render Encoder"),
