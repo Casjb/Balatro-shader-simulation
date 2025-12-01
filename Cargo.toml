@@ -9,4 +9,5 @@ wgpu = "27.0.1"
 image = "0.25"
 pollster = "0.4"
 bytemuck = { version = "1.24", features = ["derive"] }
-rfd = "0.12"
+rfd = "0.16.0"
+notify = "8.2.0"
