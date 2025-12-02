@@ -189,10 +189,34 @@ fn main() {
         ..Default::default()
     });
 
-    // describes what resources we want the shader to access by creating bindings (texture + sampler)
+    // define params struct
+    #[repr(C)]
+    #[derive(Copy, Clone, bytemuck::Zeroable, bytemuck::Pod)]
+    struct Params {
+        time: f32,
+        artifact_amplifier: f32,
+        crt_amount_adjusted: f32,
+        bloom_fac: f32,
+    }
+
+    // create a buffer to store our params in
+    let params = Params {
+        time: 0.0,
+        artifact_amplifier: 1.0,
+        crt_amount_adjusted: 1.0,
+        bloom_fac: 1.0,
+    };
+    let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Params Buffer"),
+        contents: bytemuck::bytes_of(&params),
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    });
+
+    // describes what resources we want the shader to access by creating bindings
     let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("texture_bind_group_layout"),
         entries: &[
+            // binding 0: texture
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::FRAGMENT,
@@ -203,18 +227,35 @@ fn main() {
                 },
                 count: None,
             },
+
+            // binding 1: sampler
             wgpu::BindGroupLayoutEntry {
                 binding: 1,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
             },
+
+            // binding 2: uniform buffer (Params)
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(
+                        std::mem::size_of::<Params>() as _
+                    ),
+                },
+                count: None,
+            }
         ],
     });
 
     // tie the texture and sampler to the layout's bindings we defined above
     let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("texture_bind_group"),
         layout: &bind_group_layout,
         entries: &[
             wgpu::BindGroupEntry {
@@ -225,8 +266,11 @@ fn main() {
                 binding: 1,
                 resource: wgpu::BindingResource::Sampler(&sampler),
             },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: uniform_buffer.as_entire_binding(),
+            },
         ],
-        label: Some("texture_bind_group"),
     });
 
     // define vertex data for a quad
