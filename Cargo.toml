@@ -3,6 +3,10 @@ name = "Balatro-shader-simulation"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "Balatro-shader-sim"
+path = "src/main.rs"
+
 [dependencies]
 winit = "0.30"
 wgpu = "27.0.1"
